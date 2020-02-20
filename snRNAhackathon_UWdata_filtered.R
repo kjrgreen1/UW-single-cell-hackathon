@@ -5,7 +5,7 @@ library(rqdatatable)
 library(synapser)
 
 #to login to synapse manually: synLogin("username", "password")
-synLogin()
+synLogin("", "", rememberMe = TRUE)
 
 system( paste0('tar -xvf ', synapser::synGet('syn21614190')$path) )
 system( 'gunzip home/dnanexus/6672/outs/filtered_feature_bc_matrix/matrix.mtx.gz' )
@@ -121,8 +121,9 @@ names(metadata)[names(metadata) == "Apo E"] <- "ApoE"
 metadata$ids <- as.factor(metadata$ids)
 head(metadata)
 
+#filter genes expressed in n cells
 #this count threshold can be changed
-counts <- dat[rowSums(dat != 0) >= 250,]
+counts <- dat[rowSums(dat != 0) >= 2,]
 dim(counts)
 
 #Make the cell_data_set (CDS) object for monocle:
@@ -182,17 +183,18 @@ cds_uw <- new_cell_data_set(counts,
 ### preprocessing and reduce dimensionality
 ### preprocessing includes library size normalization and regressing out pmi
 ### this takes a while
-cds_uw = preprocess_cds(cds_uw, num_dim = 30,method="PCA", norm_method="log", residual_model_formula_str="~PMI")
+cds_uw = preprocess_cds(cds_uw, num_dim = 30,method="PCA", norm_method="log", residual_model_formula_str="~PMI") #"~PMI + Batch + Sex + col_name"
 cds_uw = reduce_dimension(cds_uw)
 cds_uw = cluster_cells(cds_uw)
 plot_pc_variance_explained(cds_uw)
 
+#change labels for plot
 cds_uw$Diagnosis = cds_uw$Clinical.DX
 cds_uw$Sex = cds_uw$SEX
 cds_uw$Samples = cds_uw$ids
 head(cds_uw$Sex)
 
-p1<-plot_cells(cds_uw, color_cells_by="partition",cell_size=.001,label_cell_groups=0,show_trajectory_graph=FALSE)+theme(
+p1<-plot_cells(cds_uw, color_cells_by="partition",cell_size=.001,label_cell_groups=0,show_trajectory_graph=FALSE,)+theme(
   legend.title = element_text(size = 10),
   legend.text = element_text(size = 10))+theme(legend.position = "none")
 p2<-plot_cells(cds_uw, color_cells_by="Sex",cell_size=.001,label_cell_groups=0,show_trajectory_graph=FALSE)+theme(
@@ -202,13 +204,42 @@ p3<-plot_cells(cds_uw, color_cells_by="Diagnosis",cell_size=.001,label_cell_grou
   legend.title = element_text(size = 10),
   legend.text = element_text(size = 8))
 p4<-plot_cells(cds_uw, color_cells_by="Samples",cell_size=.001,label_cell_groups=0,show_trajectory_graph=FALSE)
-p6<-plot_cells(cds_uw, color_cells_by="cluster",cell_size=.1,label_cell_groups=0,show_trajectory_graph=FALSE)+theme(
+p6<-plot_cells(cds_uw, color_cells_by="cluster",cell_size=.1,label_cell_groups=TRUE, group_label_size = 4,show_trajectory_graph=FALSE)+theme(
   legend.title = element_text(size = 10),
   legend.text = element_text(size = 7),legend.key.size = unit(.5, "cm"),
   legend.key.width = unit(0.5,"cm") )+theme(legend.position = "none")
+p6
 #pdf(paste0("~/UW_sn_summary.pdf"))
 grid.arrange(arrangeGrob(p1,p6, ncol=2),arrangeGrob(p3,p2,ncol=2),p4, heights=c(2,2,4), ncol=1)
 #dev.off()
+
+plot_cells(cds_uw, genes=c("SYT1","SNAP25","GRIN1","GAD1","GAD2","SLC17A7","CAMK2A","NRGN","AQP4",
+                               "GFAP","MBP","MOBP","PLP1","PDGFRA","VCAN","CD74","CSF1R","C3","FLT1","CLDN5"),
+           show_trajectory_graph=FALSE,
+           label_cell_groups=FALSE,
+           label_leaves=FALSE,reduction_method="UMAP",cell_size=.1)
+
+
+####differential expression analysis of one mglia cluster
+
+cds_mglia <- cds_uw[,cds_uw@clusters$UMAP$partitions==15]
+
+eprs_model <- monocle3::fit_models(cds_mglia,
+                                   "~ePRS",
+                                   verbose = TRUE)
+
+coef <- monocle3::coefficient_table(eprs_model)
+
+View(coef)
+
+
+
+
+####differential expression analysis of individual clusters
+eprs_model <- monocle3::fit_models(cds_uw,
+                                   "~ePRS",
+                                   verbose = TRUE)
+
 
 #label marker genes, defined by mathys et al
 genes<-c()
@@ -294,6 +325,8 @@ cds_subset$Diagnosis[cds_subset$ids!=6672]='AD'
 
 #####UNTESTED CODE FROM REBECCA--STILL WORKING OUT ISSUES######
 
+cds_subset -> cds_sync
+
 ## Identify Mic1 subcluster in UW data
 #l = c(l,as.vector(mathy_marker_genes$gene.name[mathy_marker_genes$subpopulation=='Mic0']))
 l = as.vector(mathy_marker_genes$gene.name[mathy_marker_genes$subpopulation=='Mic1'])
@@ -302,11 +335,11 @@ l = unique(l)
 length(l)
 inds = c()
 for (gene in l){
-  if ((gene %in% rownames(cds_uw))){
-    inds = c(inds,which(rownames(cds_uw)==gene))
+  if ((gene %in% rownames(cds_subset))){
+    inds = c(inds,which(rownames(cds_subset)==gene))
   }
 }
-cds_subset <- cds_uw[inds,cds_uw$broad.cell.type=='Mic']
+cds_subset <- cds_subset[inds,cds_subset$broad.cell.type=='Mic']
 cds_subset <- preprocess_cds(cds_subset, num_dim = 30,residual_model_formula_str="~PMI")
 cds_subset = reduce_dimension(cds_subset)
 cds_subset = cluster_cells(cds_subset)
